@@ -81,7 +81,7 @@ def registrar_venta(items_venta, metodo_pago="EFECTIVO", cliente=""):
         total = item["Cantidad"] * item["Precio Venta"]
         registros.append({
             "Fecha_Hora": fecha_hora,
-            "Fecha": fecha_corta,
+            "Fecha": str(fecha_corta),
             "ID": item["ID"],
             "Producto": item["Nombre"].upper(),
             "Cantidad": item["Cantidad"],
@@ -113,10 +113,10 @@ def registrar_abono_historial(cliente, monto, metodo_pago):
     fecha_corta = obtener_fecha_corta_local()
     nuevo_abono = {
         "Fecha_Hora": fecha_hora,
-        "Fecha": fecha_corta,
+        "Fecha": str(fecha_corta),
         "Cliente": str(cliente).upper(),
-        "Monto": monto,
-        "Metodo_Pago": metodo_pago.upper()
+        "Monto": float(monto),
+        "Metodo_Pago": str(metodo_pago).upper()
     }
     if os.path.exists(ARCHIVO_ABONOS):
         df_ab = pd.read_csv(ARCHIVO_ABONOS)
@@ -599,25 +599,27 @@ with tab_rep:
     fecha_filtro = st.date_input("Seleccionar Fecha de Cierre de Caja:", value=date.today())
     fecha_str = fecha_filtro.strftime("%Y-%m-%d")
     
-    # Cargar Ventas del Día
+    # Cargar Ventas del Día con filtro estricto de texto
     ventas_dia = pd.DataFrame()
     if os.path.exists(ARCHIVO_VENTAS):
         df_v = pd.read_csv(ARCHIVO_VENTAS)
-        ventas_dia = df_v[df_v["Fecha"] == fecha_str]
+        if "Fecha" in df_v.columns:
+            ventas_dia = df_v[df_v["Fecha"].astype(str) == str(fecha_str)]
 
-    # Cargar Abonos del Día
+    # Cargar Abonos del Día con filtro estricto de texto
     abonos_dia = pd.DataFrame()
     if os.path.exists(ARCHIVO_ABONOS):
         df_ab = pd.read_csv(ARCHIVO_ABONOS)
-        abonos_dia = df_ab[df_ab["Fecha"] == fecha_str]
+        if "Fecha" in df_ab.columns:
+            abonos_dia = df_ab[df_ab["Fecha"].astype(str) == str(fecha_str)]
 
-    # Calculo de ingresos REALES de Dinero
-    ventas_efectivo = ventas_dia[ventas_dia["Metodo_Pago"] == "EFECTIVO"]["Total"].sum() if not ventas_dia.empty else 0
-    ventas_transf = ventas_dia[ventas_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Total"].sum() if not ventas_dia.empty else 0
-    ventas_fiado = ventas_dia[ventas_dia["Metodo_Pago"] == "FIADO"]["Total"].sum() if not ventas_dia.empty else 0
+    # Cálculo de ingresos REALES de Dinero
+    ventas_efectivo = pd.to_numeric(ventas_dia[ventas_dia["Metodo_Pago"] == "EFECTIVO"]["Total"], errors="coerce").sum() if not ventas_dia.empty else 0
+    ventas_transf = pd.to_numeric(ventas_dia[ventas_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Total"], errors="coerce").sum() if not ventas_dia.empty else 0
+    ventas_fiado = pd.to_numeric(ventas_dia[ventas_dia["Metodo_Pago"] == "FIADO"]["Total"], errors="coerce").sum() if not ventas_dia.empty else 0
 
-    abonos_efectivo = abonos_dia[abonos_dia["Metodo_Pago"] == "EFECTIVO"]["Monto"].sum() if not abonos_dia.empty else 0
-    abonos_transf = abonos_dia[abonos_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Monto"].sum() if not abonos_dia.empty else 0
+    abonos_efectivo = pd.to_numeric(abonos_dia[abonos_dia["Metodo_Pago"] == "EFECTIVO"]["Monto"], errors="coerce").sum() if not abonos_dia.empty else 0
+    abonos_transf = pd.to_numeric(abonos_dia[abonos_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Monto"], errors="coerce").sum() if not abonos_dia.empty else 0
 
     total_efectivo_caja = ventas_efectivo + abonos_efectivo
     total_transf_caja = ventas_transf + abonos_transf
