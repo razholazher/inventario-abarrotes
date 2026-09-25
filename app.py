@@ -72,23 +72,41 @@ def registrar_kardex(id_prod, nombre, tipo_movimiento, cantidad, motivo=""):
         df_kardex = pd.DataFrame([nuevo_mov])
     df_kardex.to_csv(ARCHIVO_KARDEX, index=False)
 
-def registrar_venta(items_venta, metodo_pago="EFECTIVO", cliente=""):
+def registrar_venta_desglosada(items_venta, m_efectivo, m_transf, m_fiado, cliente=""):
     fecha_hora = obtener_fecha_hora_local()
     fecha_corta = obtener_fecha_corta_local()
     registros = []
     
+    total_venta = sum(item["Cantidad"] * item["Precio Venta"] for item in items_venta)
+    
+    # Determinamos etiqueta principal para el historial
+    if m_fiado == total_venta:
+        metodo_general = "FIADO"
+    elif m_efectivo == total_venta:
+        metodo_general = "EFECTIVO"
+    elif m_transf == total_venta:
+        metodo_general = "TRANSFERENCIA"
+    else:
+        metodo_general = "PAGO MIXTO"
+
     for item in items_venta:
-        total = item["Cantidad"] * item["Precio Venta"]
+        subtotal = item["Cantidad"] * item["Precio Venta"]
+        # Proporción para desglosar importes en la base de datos si es pago mixto
+        prop = subtotal / total_venta if total_venta > 0 else 0
+        
         registros.append({
             "Fecha_Hora": fecha_hora,
             "Fecha": str(fecha_corta),
-            "ID": item["ID"],
+            "ID": str(item["ID"]),
             "Producto": item["Nombre"].upper(),
             "Cantidad": item["Cantidad"],
             "Precio_Venta": item["Precio Venta"],
-            "Total": total,
-            "Metodo_Pago": metodo_pago,
-            "Cliente": cliente.upper()
+            "Total": subtotal,
+            "Monto_Efectivo": round(m_efectivo * prop, 2),
+            "Monto_Transferencia": round(m_transf * prop, 2),
+            "Monto_Fiado": round(m_fiado * prop, 2),
+            "Metodo_Pago": metodo_general,
+            "Cliente": cliente.upper() if cliente else "GENERAL"
         })
     
     df_nuevas = pd.DataFrame(registros)
@@ -342,33 +360,64 @@ with tab_pos:
             total_pagar = df_car["Subtotal"].sum()
             st.markdown(f"## **TOTAL: ${total_pagar:,.2f}**")
             
-            metodo_pago = st.selectbox("Método de Pago:", ["EFECTIVO", "TRANSFERENCIA", "FIADO"])
+            metodo_pago = st.selectbox("Método de Pago:", ["EFECTIVO", "TRANSFERENCIA", "FIADO", "PAGO MIXTO / COMBINADO"])
+            
+            m_efectivo = 0.0
+            m_transf = 0.0
+            m_fiado = 0.0
             cliente_fiado = ""
-            if metodo_pago == "FIADO":
+            
+            if metodo_pago == "EFECTIVO":
+                m_efectivo = float(total_pagar)
+            elif metodo_pago == "TRANSFERENCIA":
+                m_transf = float(total_pagar)
+            elif metodo_pago == "FIADO":
+                m_fiado = float(total_pagar)
                 cliente_fiado = st.text_input("Nombre del Cliente (Fiado):").strip().upper()
+            elif metodo_pago == "PAGO MIXTO / COMBINADO":
+                st.markdown("#### 💵 Desglose del Pago Mixto")
+                m_efectivo = st.number_input("💵 Pago en Efectivo ($):", min_value=0.0, value=0.0, step=500.0)
+                m_transf = st.number_input("💳 Pago en Transferencia ($):", min_value=0.0, value=0.0, step=500.0)
+                m_fiado = st.number_input("🤝 Queda debiendo / Fiado ($):", min_value=0.0, value=0.0, step=500.0)
                 
-            if st.button("✅ REGISTRAR VENTA", type="primary", use_container_width=True):
-                if metodo_pago == "FIADO" and not cliente_fiado:
-                    st.error("❌ Escribe el nombre del cliente para registrar el fiado.")
+                if m_fiado > 0:
+                    cliente_fiado = st.text_input("Nombre del Cliente (Fiado):").strip().upper()
+                    
+                suma_pagos = m_efectivo + m_transf + m_fiado
+                diferencia = total_pagar - suma_pagos
+                
+                if abs(diferencia) > 0.01:
+                    st.warning(f"⚠️ La suma de los pagos (${suma_pagos:,.2f}) no coincide con el total (${total_pagar:,.2f}). Faltan / Sobran: ${diferencia:,.2f}")
                 else:
+                    st.success("✅ El desglose coincide perfectamente con el total.")
+
+            if st.button("✅ REGISTRAR VENTA", type="primary", use_container_width=True):
+                suma_pagos = m_efectivo + m_transf + m_fiado
+                if abs(total_pagar - suma_pagos) > 0.01:
+                    st.error("❌ El total pagado no coincide con el total de la venta.")
+                elif m_fiado > 0 and not cliente_fiado:
+                    st.error("❌ Debes ingresar el nombre del cliente para registrar el fiado.")
+                else:
+                    # Descontar stock
                     for item in st.session_state.carrito:
                         id_item = item["ID"]
                         cant = item["Cantidad"]
                         df_inv.loc[df_inv["ID"] == id_item, "Cantidad"] -= cant
-                        registrar_kardex(id_item, item["Nombre"], "VENTA" if metodo_pago != "FIADO" else "FIADO", cant, f"Venta {metodo_pago}")
+                        registrar_kardex(id_item, item["Nombre"], "VENTA", cant, f"Venta {metodo_pago}")
                     
                     guardar_inventario(df_inv)
-                    registrar_venta(st.session_state.carrito, metodo_pago, cliente_fiado)
+                    registrar_venta_desglosada(st.session_state.carrito, m_efectivo, m_transf, m_fiado, cliente_fiado)
                     
-                    if metodo_pago == "FIADO":
+                    # Registrar deuda de la parte fiada
+                    if m_fiado > 0:
                         df_f = cargar_fiados()
                         if cliente_fiado in df_f["Cliente"].values:
-                            df_f.loc[df_f["Cliente"] == cliente_fiado, "Total_Deuda"] += total_pagar
+                            df_f.loc[df_f["Cliente"] == cliente_fiado, "Total_Deuda"] += m_fiado
                             df_f.loc[df_f["Cliente"] == cliente_fiado, "Fecha_Ultimo_Movimiento"] = obtener_fecha_corta_local()
                         else:
                             nuevo_fiado = {
                                 "Cliente": cliente_fiado,
-                                "Total_Deuda": total_pagar,
+                                "Total_Deuda": m_fiado,
                                 "Ultimo_Abono": 0,
                                 "Fecha_Ultimo_Movimiento": obtener_fecha_corta_local()
                             }
@@ -376,7 +425,7 @@ with tab_pos:
                         guardar_fiados(df_f)
                     
                     st.session_state.carrito = []
-                    st.success("🎉 ¡Venta realizada con éxito!")
+                    st.success("🎉 ¡Venta registrada exitosamente!")
                     st.rerun()
                     
             if st.button("🗑️ Vaciar Carrito", use_container_width=True):
@@ -599,24 +648,27 @@ with tab_rep:
     fecha_filtro = st.date_input("Seleccionar Fecha de Cierre de Caja:", value=date.today())
     fecha_str = fecha_filtro.strftime("%Y-%m-%d")
     
-    # Cargar Ventas del Día con filtro estricto de texto
+    # Cargar Ventas del Día
     ventas_dia = pd.DataFrame()
     if os.path.exists(ARCHIVO_VENTAS):
         df_v = pd.read_csv(ARCHIVO_VENTAS)
         if "Fecha" in df_v.columns:
             ventas_dia = df_v[df_v["Fecha"].astype(str) == str(fecha_str)]
 
-    # Cargar Abonos del Día con filtro estricto de texto
+    # Cargar Abonos del Día
     abonos_dia = pd.DataFrame()
     if os.path.exists(ARCHIVO_ABONOS):
         df_ab = pd.read_csv(ARCHIVO_ABONOS)
         if "Fecha" in df_ab.columns:
             abonos_dia = df_ab[df_ab["Fecha"].astype(str) == str(fecha_str)]
 
-    # Cálculo de ingresos REALES de Dinero
-    ventas_efectivo = pd.to_numeric(ventas_dia[ventas_dia["Metodo_Pago"] == "EFECTIVO"]["Total"], errors="coerce").sum() if not ventas_dia.empty else 0
-    ventas_transf = pd.to_numeric(ventas_dia[ventas_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Total"], errors="coerce").sum() if not ventas_dia.empty else 0
-    ventas_fiado = pd.to_numeric(ventas_dia[ventas_dia["Metodo_Pago"] == "FIADO"]["Total"], errors="coerce").sum() if not ventas_dia.empty else 0
+    # Cálculo desglosado de ingresos
+    if not ventas_dia.empty:
+        ventas_efectivo = pd.to_numeric(ventas_dia.get("Monto_Efectivo", ventas_dia[ventas_dia["Metodo_Pago"] == "EFECTIVO"]["Total"]), errors="coerce").fillna(0).sum()
+        ventas_transf = pd.to_numeric(ventas_dia.get("Monto_Transferencia", ventas_dia[ventas_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Total"]), errors="coerce").fillna(0).sum()
+        ventas_fiado = pd.to_numeric(ventas_dia.get("Monto_Fiado", ventas_dia[ventas_dia["Metodo_Pago"] == "FIADO"]["Total"]), errors="coerce").fillna(0).sum()
+    else:
+        ventas_efectivo, ventas_transf, ventas_fiado = 0.0, 0.0, 0.0
 
     abonos_efectivo = pd.to_numeric(abonos_dia[abonos_dia["Metodo_Pago"] == "EFECTIVO"]["Monto"], errors="coerce").sum() if not abonos_dia.empty else 0
     abonos_transf = pd.to_numeric(abonos_dia[abonos_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Monto"], errors="coerce").sum() if not abonos_dia.empty else 0
@@ -652,7 +704,8 @@ with tab_rep:
     with col_r1:
         st.markdown("### 📑 Ventas del Día")
         if not ventas_dia.empty:
-            st.dataframe(ventas_dia[["Fecha_Hora", "Producto", "Cantidad", "Total", "Metodo_Pago", "Cliente"]], use_container_width=True, hide_index=True)
+            cols_mostrar = [c for c in ["Fecha_Hora", "Producto", "Cantidad", "Total", "Metodo_Pago", "Cliente"] if c in ventas_dia.columns]
+            st.dataframe(ventas_dia[cols_mostrar], use_container_width=True, hide_index=True)
         else:
             st.info("No hay ventas registradas para este día.")
             
