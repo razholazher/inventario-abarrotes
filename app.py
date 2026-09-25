@@ -28,7 +28,11 @@ def cargar_tabla(worksheet_name, columns_default):
         return pd.DataFrame(columns=columns_default)
 
 def guardar_tabla(df, worksheet_name):
-    conn.update(worksheet=worksheet_name, data=df)
+    conn.update(
+        spreadsheet="https://docs.google.com/spreadsheets/d/1fqMOserbjbk72F74-mlA-3Qb6DhN0-gnQIbzZQL0eqQ/edit",
+        worksheet=worksheet_name,
+        data=df
+    )
 
 # --- FUNCIONALIDAD DE HORA LOCAL (COLOMBIA) ---
 def obtener_fecha_hora_local():
