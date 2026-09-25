@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
-import os
 import io
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
+from streamlit_gsheets import GSheetsConnection
 
 # Librerías para generar el PDF
 from reportlab.lib.pagesizes import letter
@@ -14,12 +14,20 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 # Configuración de página
 st.set_page_config(page_title="Sistema Integral de Abarrotes", page_icon="🏪", layout="wide")
 
-# Archivos de datos
-ARCHIVO_INVENTARIO = "inventario.xlsx"
-ARCHIVO_VENTAS = "ventas.csv"
-ARCHIVO_KARDEX = "kardex.csv"
-ARCHIVO_FIADOS = "fiados.csv"
-ARCHIVO_ABONOS = "abonos.csv"
+# --- CONEXIÓN A GOOGLE SHEETS ---
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+def cargar_tabla(worksheet_name, columns_default):
+    try:
+        df = conn.read(worksheet=worksheet_name, ttl=0)
+        if df is None or df.empty:
+            return pd.DataFrame(columns=columns_default)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=columns_default)
+
+def guardar_tabla(df, worksheet_name):
+    conn.update(worksheet=worksheet_name, data=df)
 
 # --- FUNCIONALIDAD DE HORA LOCAL (COLOMBIA) ---
 def obtener_fecha_hora_local():
@@ -28,58 +36,47 @@ def obtener_fecha_hora_local():
 def obtener_fecha_corta_local():
     return datetime.now(ZoneInfo("America/Bogota")).strftime("%Y-%m-%d")
 
-# --- FUNCIONES DE CARGA Y GUARDADO ---
+# --- CARGA Y PROCESAMIENTO DE DATOS ---
 
 def cargar_inventario():
-    if os.path.exists(ARCHIVO_INVENTARIO):
-        try:
-            df = pd.read_excel(ARCHIVO_INVENTARIO)
-            df["ID"] = df["ID"].astype(str)
-            df["Nombre"] = df["Nombre"].astype(str).str.upper()
-            df["Categoría"] = df["Categoría"].astype(str).str.upper()
-            df["Proveedor"] = df.get("Proveedor", pd.Series(["GENERAL"] * len(df))).astype(str).str.upper()
-            df["Observaciones"] = df["Observaciones"].fillna("").astype(str).str.upper()
-            
-            if "Fecha Ingreso" not in df.columns:
-                df["Fecha Ingreso"] = obtener_fecha_hora_local()
-            df["Fecha Ingreso"] = df["Fecha Ingreso"].fillna("").astype(str)
-            return df
-        except Exception:
-            return crear_df_inventario_vacio()
-    else:
-        return crear_df_inventario_vacio()
-
-def crear_df_inventario_vacio():
-    return pd.DataFrame(columns=["ID", "Nombre", "Categoría", "Precio Compra", "Precio Venta", "Cantidad", "Proveedor", "Fecha Ingreso", "Observaciones"])
+    cols = ["ID", "Nombre", "Categoría", "Precio Compra", "Precio Venta", "Cantidad", "Proveedor", "Fecha Ingreso", "Observaciones"]
+    df = cargar_tabla("inventario", cols)
+    if not df.empty:
+        df["ID"] = df["ID"].astype(str)
+        df["Nombre"] = df["Nombre"].astype(str).str.upper()
+        df["Categoría"] = df["Categoría"].astype(str).str.upper()
+        df["Proveedor"] = df.get("Proveedor", pd.Series(["GENERAL"] * len(df))).astype(str).str.upper()
+        df["Observaciones"] = df["Observaciones"].fillna("").astype(str).str.upper()
+        df["Fecha Ingreso"] = df["Fecha Ingreso"].fillna("").astype(str)
+    return df
 
 def guardar_inventario(df):
-    df.to_excel(ARCHIVO_INVENTARIO, index=False)
+    guardar_tabla(df, "inventario")
 
 def registrar_kardex(id_prod, nombre, tipo_movimiento, cantidad, motivo=""):
-    fecha_hora = obtener_fecha_hora_local()
+    cols = ["Fecha", "ID", "Producto", "Tipo", "Cantidad", "Motivo"]
+    df_kardex = cargar_tabla("kardex", cols)
     nuevo_mov = {
-        "Fecha": fecha_hora,
+        "Fecha": obtener_fecha_hora_local(),
         "ID": str(id_prod),
         "Producto": str(nombre).upper(),
-        "Tipo": tipo_movimiento.upper(), # ENTRADA, VENTA, MERMA, FIADO, AJUSTE
+        "Tipo": tipo_movimiento.upper(),
         "Cantidad": cantidad,
         "Motivo": motivo.upper()
     }
-    if os.path.exists(ARCHIVO_KARDEX):
-        df_kardex = pd.read_csv(ARCHIVO_KARDEX)
-        df_kardex = pd.concat([df_kardex, pd.DataFrame([nuevo_mov])], ignore_index=True)
-    else:
-        df_kardex = pd.DataFrame([nuevo_mov])
-    df_kardex.to_csv(ARCHIVO_KARDEX, index=False)
+    df_kardex = pd.concat([df_kardex, pd.DataFrame([nuevo_mov])], ignore_index=True)
+    guardar_tabla(df_kardex, "kardex")
 
 def registrar_venta_desglosada(items_venta, m_efectivo, m_transf, m_fiado, cliente=""):
+    cols = ["Fecha_Hora", "Fecha", "ID", "Producto", "Cantidad", "Precio_Venta", "Total", "Monto_Efectivo", "Monto_Transferencia", "Monto_Fiado", "Metodo_Pago", "Cliente"]
+    df_ventas = cargar_tabla("ventas", cols)
+    
     fecha_hora = obtener_fecha_hora_local()
     fecha_corta = obtener_fecha_corta_local()
     registros = []
     
     total_venta = sum(item["Cantidad"] * item["Precio Venta"] for item in items_venta)
     
-    # Determinamos etiqueta principal para el historial
     if m_fiado == total_venta:
         metodo_general = "FIADO"
     elif m_efectivo == total_venta:
@@ -91,7 +88,6 @@ def registrar_venta_desglosada(items_venta, m_efectivo, m_transf, m_fiado, clien
 
     for item in items_venta:
         subtotal = item["Cantidad"] * item["Precio Venta"]
-        # Proporción para desglosar importes en la base de datos si es pago mixto
         prop = subtotal / total_venta if total_venta > 0 else 0
         
         registros.append({
@@ -109,66 +105,47 @@ def registrar_venta_desglosada(items_venta, m_efectivo, m_transf, m_fiado, clien
             "Cliente": cliente.upper() if cliente else "GENERAL"
         })
     
-    df_nuevas = pd.DataFrame(registros)
-    if os.path.exists(ARCHIVO_VENTAS):
-        df_ventas = pd.read_csv(ARCHIVO_VENTAS)
-        df_ventas = pd.concat([df_ventas, df_nuevas], ignore_index=True)
-    else:
-        df_ventas = df_nuevas
-    df_ventas.to_csv(ARCHIVO_VENTAS, index=False)
+    df_ventas = pd.concat([df_ventas, pd.DataFrame(registros)], ignore_index=True)
+    guardar_tabla(df_ventas, "ventas")
 
 def cargar_fiados():
-    if os.path.exists(ARCHIVO_FIADOS):
-        return pd.read_csv(ARCHIVO_FIADOS)
-    else:
-        return pd.DataFrame(columns=["Cliente", "Total_Deuda", "Ultimo_Abono", "Fecha_Ultimo_Movimiento"])
+    cols = ["Cliente", "Total_Deuda", "Ultimo_Abono", "Fecha_Ultimo_Movimiento"]
+    return cargar_tabla("fiados", cols)
 
 def guardar_fiados(df_fiados):
-    df_fiados.to_csv(ARCHIVO_FIADOS, index=False)
+    guardar_tabla(df_fiados, "fiados")
 
 def registrar_abono_historial(cliente, monto, metodo_pago):
-    fecha_hora = obtener_fecha_hora_local()
-    fecha_corta = obtener_fecha_corta_local()
+    cols = ["Fecha_Hora", "Fecha", "Cliente", "Monto", "Metodo_Pago"]
+    df_ab = cargar_tabla("abonos", cols)
     nuevo_abono = {
-        "Fecha_Hora": fecha_hora,
-        "Fecha": str(fecha_corta),
+        "Fecha_Hora": obtener_fecha_hora_local(),
+        "Fecha": str(obtener_fecha_corta_local()),
         "Cliente": str(cliente).upper(),
         "Monto": float(monto),
         "Metodo_Pago": str(metodo_pago).upper()
     }
-    if os.path.exists(ARCHIVO_ABONOS):
-        df_ab = pd.read_csv(ARCHIVO_ABONOS)
-        df_ab = pd.concat([df_ab, pd.DataFrame([nuevo_abono])], ignore_index=True)
-    else:
-        df_ab = pd.DataFrame([nuevo_abono])
-    df_ab.to_csv(ARCHIVO_ABONOS, index=False)
+    df_ab = pd.concat([df_ab, pd.DataFrame([nuevo_abono])], ignore_index=True)
+    guardar_tabla(df_ab, "abonos")
 
-# Función para generar el PDF del Inventario en memoria
+# --- GENERACIÓN DE REPORTES PDF ---
+
 def generar_pdf_inventario(df):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     story = []
-    
     styles = getSampleStyleSheet()
-    titulo_style = ParagraphStyle(
-        'TituloStyle', parent=styles['Heading1'], fontSize=18, textColor=colors.HexColor("#1F2937"), spaceAfter=12
-    )
+    titulo_style = ParagraphStyle('TituloStyle', parent=styles['Heading1'], fontSize=18, textColor=colors.HexColor("#1F2937"), spaceAfter=12)
     
     story.append(Paragraph("📦 REPORTE OFICIAL DE INVENTARIO", titulo_style))
     story.append(Spacer(1, 10))
     
     headers = ["ID", "Nombre", "Categoría", "P. Compra", "P. Venta", "Cant.", "Fecha Ingreso"]
     data = [headers]
-    
     for _, row in df.iterrows():
         data.append([
-            str(row["ID"]),
-            str(row["Nombre"]).upper(),
-            str(row["Categoría"]).upper(),
-            f"${row['Precio Compra']:,.2f}",
-            f"${row['Precio Venta']:,.2f}",
-            str(row["Cantidad"]),
-            str(row.get("Fecha Ingreso", ""))
+            str(row["ID"]), str(row["Nombre"]).upper(), str(row["Categoría"]).upper(),
+            f"${row['Precio Compra']:,.2f}", f"${row['Precio Venta']:,.2f}", str(row["Cantidad"]), str(row.get("Fecha Ingreso", ""))
         ])
     
     tabla = Table(data, colWidths=[50, 130, 80, 65, 65, 40, 90])
@@ -178,36 +155,25 @@ def generar_pdf_inventario(df):
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, 0), 9),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#F3F4F6")),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
-        ('FONTSIZE', (0, 1), (-1, -1), 8),
     ]))
-    
     story.append(tabla)
     doc.build(story)
     buffer.seek(0)
     return buffer
 
-# Función para generar el PDF del Cierre de Caja en memoria
 def generar_pdf_cierre_caja(fecha_str, total_efectivo, total_transf, total_fiado, total_recaudo, df_ventas, df_abonos):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     story = []
-    
     styles = getSampleStyleSheet()
-    titulo_style = ParagraphStyle(
-        'TituloStyle', parent=styles['Heading1'], fontSize=16, textColor=colors.HexColor("#1E3A8A"), spaceAfter=8
-    )
-    sub_style = ParagraphStyle(
-        'SubStyle', parent=styles['Heading2'], fontSize=12, textColor=colors.HexColor("#1F2937"), spaceBefore=10, spaceAfter=6
-    )
+    titulo_style = ParagraphStyle('TituloStyle', parent=styles['Heading1'], fontSize=16, textColor=colors.HexColor("#1E3A8A"), spaceAfter=8)
+    sub_style = ParagraphStyle('SubStyle', parent=styles['Heading2'], fontSize=12, textColor=colors.HexColor("#1F2937"), spaceBefore=10, spaceAfter=6)
     
     story.append(Paragraph(f"📊 REPORTE DE CIERRE DE CAJA - {fecha_str}", titulo_style))
     story.append(Paragraph(f"Fecha de Generación: {obtener_fecha_hora_local()}", styles['Normal']))
     story.append(Spacer(1, 10))
     
-    # Resumen Financiero
     data_resumen = [
         ["CONCEPTO", "MONTO"],
         ["💵 Total Efectivo en Caja", f"${total_efectivo:,.2f}"],
@@ -227,18 +193,13 @@ def generar_pdf_cierre_caja(fecha_str, total_efectivo, total_transf, total_fiado
     story.append(t_resumen)
     story.append(Spacer(1, 15))
     
-    # Tabla de Ventas
     story.append(Paragraph("📑 Detalle de Ventas del Día", sub_style))
     if not df_ventas.empty:
         data_v = [["Hora", "Producto", "Cant.", "Total", "Pago", "Cliente"]]
         for _, r in df_ventas.iterrows():
             data_v.append([
                 str(r["Fecha_Hora"]).split()[-1] if len(str(r["Fecha_Hora"]).split()) > 1 else str(r["Fecha_Hora"]),
-                str(r["Producto"]),
-                str(r["Cantidad"]),
-                f"${r['Total']:,.2f}",
-                str(r["Metodo_Pago"]),
-                str(r["Cliente"]) if pd.notna(r["Cliente"]) else ""
+                str(r["Producto"]), str(r["Cantidad"]), f"${r['Total']:,.2f}", str(r["Metodo_Pago"]), str(r["Cliente"]) if pd.notna(r["Cliente"]) else ""
             ])
         t_ventas = Table(data_v, colWidths=[60, 160, 40, 70, 90, 80])
         t_ventas.setStyle(TableStyle([
@@ -253,16 +214,13 @@ def generar_pdf_cierre_caja(fecha_str, total_efectivo, total_transf, total_fiado
         
     story.append(Spacer(1, 15))
     
-    # Tabla de Abonos
     story.append(Paragraph("💵 Abonos Recibidos Hoy", sub_style))
     if not df_abonos.empty:
         data_a = [["Hora", "Cliente", "Monto", "Método Pago"]]
         for _, r in df_abonos.iterrows():
             data_a.append([
                 str(r["Fecha_Hora"]).split()[-1] if len(str(r["Fecha_Hora"]).split()) > 1 else str(r["Fecha_Hora"]),
-                str(r["Cliente"]),
-                f"${r['Monto']:,.2f}",
-                str(r["Metodo_Pago"])
+                str(r["Cliente"]), f"${r['Monto']:,.2f}", str(r["Metodo_Pago"])
             ])
         t_abonos = Table(data_a, colWidths=[80, 200, 100, 120])
         t_abonos.setStyle(TableStyle([
@@ -279,7 +237,7 @@ def generar_pdf_cierre_caja(fecha_str, total_efectivo, total_transf, total_fiado
     buffer.seek(0)
     return buffer
 
-# Carga inicial de datos
+# Carga inicial de datos desde Google Sheets
 df_inv = cargar_inventario()
 
 if not df_inv.empty:
@@ -288,14 +246,12 @@ if not df_inv.empty:
     df_inv["Cantidad"] = pd.to_numeric(df_inv["Cantidad"], errors="coerce").fillna(0).astype(int)
     df_inv["Fecha Ingreso"] = df_inv["Fecha Ingreso"].astype(str)
 
-# Inicialización de estado de sesión para el Carrito de Ventas
 if "carrito" not in st.session_state:
     st.session_state.carrito = []
 
 # Encabezado Principal
 st.title("🏪 SISTEMA INTEGRAL DE ABARROTES")
 
-# PESTAÑAS PRINCIPALES
 tab_pos, tab_inv, tab_kardex, tab_prov, tab_fiados, tab_rep = st.tabs([
     "🛒 PUNTO DE VENTA (POS)",
     "📦 INVENTARIO & PRODUCTOS",
@@ -398,7 +354,6 @@ with tab_pos:
                 elif m_fiado > 0 and not cliente_fiado:
                     st.error("❌ Debes ingresar el nombre del cliente para registrar el fiado.")
                 else:
-                    # Descontar stock
                     for item in st.session_state.carrito:
                         id_item = item["ID"]
                         cant = item["Cantidad"]
@@ -408,12 +363,11 @@ with tab_pos:
                     guardar_inventario(df_inv)
                     registrar_venta_desglosada(st.session_state.carrito, m_efectivo, m_transf, m_fiado, cliente_fiado)
                     
-                    # Registrar deuda de la parte fiada
                     if m_fiado > 0:
                         df_f = cargar_fiados()
-                        if cliente_fiado in df_f["Cliente"].values:
-                            df_f.loc[df_f["Cliente"] == cliente_fiado, "Total_Deuda"] += m_fiado
-                            df_f.loc[df_f["Cliente"] == cliente_fiado, "Fecha_Ultimo_Movimiento"] = obtener_fecha_corta_local()
+                        if not df_f.empty and cliente_fiado in df_f["Cliente"].astype(str).values:
+                            df_f.loc[df_f["Cliente"].astype(str) == cliente_fiado, "Total_Deuda"] = pd.to_numeric(df_f.loc[df_f["Cliente"].astype(str) == cliente_fiado, "Total_Deuda"], errors="coerce").fillna(0) + m_fiado
+                            df_f.loc[df_f["Cliente"].astype(str) == cliente_fiado, "Fecha_Ultimo_Movimiento"] = obtener_fecha_corta_local()
                         else:
                             nuevo_fiado = {
                                 "Cliente": cliente_fiado,
@@ -452,10 +406,10 @@ with tab_inv:
         st.info("El inventario está vacío.")
 
     st.divider()
-    st.subheader("📝 FORMULARIO DE PRODUCTO (CREAR / EDITAR)")
+    st.subheader("📝 FORMULARIO DE PRODUCTO (CREAR / EDITAR / ELIMINAR)")
 
     opciones = ["-- CREAR PRODUCTO NUEVO --"] + [f"{row['ID']} - {str(row['Nombre']).upper()}" for _, row in df_inv.iterrows()]
-    seleccion = st.selectbox("SELECCIONA UN PRODUCTO PARA EDITAR:", opciones, key="select_producto")
+    seleccion = st.selectbox("SELECCIONA UN PRODUCTO PARA EDITAR / ELIMINAR:", opciones, key="select_producto")
 
     is_nuevo = (seleccion == "-- CREAR PRODUCTO NUEVO --")
     
@@ -500,7 +454,16 @@ with tab_inv:
                 ["Sumar al stock y Promediar Costo de Compra", "Sobrescribir completamente"]
             )
 
-        boton_guardar = st.form_submit_button("💾 GUARDAR PRODUCTO", use_container_width=True)
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            boton_guardar = st.form_submit_button("💾 GUARDAR PRODUCTO", use_container_width=True)
+        with col_b2:
+            confirmar_borrado = False
+            if not is_nuevo:
+                confirmar_borrado = st.checkbox("Confirmar eliminación de este producto")
+                boton_eliminar = st.form_submit_button("🗑️ ELIMINAR PRODUCTO", use_container_width=True)
+            else:
+                boton_eliminar = False
 
         if boton_guardar:
             id_ingresado = id_prod.strip().upper()
@@ -560,14 +523,28 @@ with tab_inv:
                 except ValueError:
                     st.error("❌ Los Precios y la Cantidad deben ser valores numéricos válidos.")
 
+        if boton_eliminar:
+            if not confirmar_borrado:
+                st.error("⚠️ Marca la casilla de confirmación para eliminar este producto.")
+            else:
+                id_elim = val_id
+                nombre_elim = val_nombre
+                cant_elim = int(val_cant) if val_cant.isdigit() else 0
+                
+                df_inv = df_inv[df_inv["ID"].astype(str) != str(id_elim)]
+                guardar_inventario(df_inv)
+                registrar_kardex(id_elim, nombre_elim, "MERMA / BORRADO", cant_elim, "Eliminado del inventario")
+                st.success(f"🗑️ Producto '{nombre_elim}' eliminado correctamente.")
+                st.rerun()
+
 # ==========================================
 # 3. KARDEX Y MOVIMIENTOS
 # ==========================================
 with tab_kardex:
     st.subheader("📜 Historial de Movimientos de Inventario (Kardex)")
     st.info("💡 Nota: El Kardex registra el movimiento físico de mercancías (entradas, ventas y ajustes). Los abonos en efectivo/transferencia se consultan en las pestañas de Fiados y Reportes de Caja.")
-    if os.path.exists(ARCHIVO_KARDEX):
-        df_k = pd.read_csv(ARCHIVO_KARDEX)
+    df_k = cargar_tabla("kardex", ["Fecha", "ID", "Producto", "Tipo", "Cantidad", "Motivo"])
+    if not df_k.empty:
         st.dataframe(df_k.sort_values(by="Fecha", ascending=False), use_container_width=True, hide_index=True)
     else:
         st.info("Aún no hay movimientos registrados.")
@@ -598,6 +575,8 @@ with tab_prov:
 with tab_fiados:
     st.subheader("🤝 Control de Cuentas por Cobrar (Fiados)")
     df_f = cargar_fiados()
+    if not df_f.empty:
+        df_f["Total_Deuda"] = pd.to_numeric(df_f["Total_Deuda"], errors="coerce").fillna(0)
     
     col_f1, col_f2 = st.columns([2, 1])
     with col_f1:
@@ -616,7 +595,7 @@ with tab_fiados:
             metodo_abono = st.selectbox("Método de Pago del Abono:", ["EFECTIVO", "TRANSFERENCIA"])
             
             if st.button("💾 Registrar Abono", use_container_width=True):
-                deuda_actual = df_f.loc[df_f["Cliente"] == cli_sel, "Total_Deuda"].values[0]
+                deuda_actual = float(df_f.loc[df_f["Cliente"] == cli_sel, "Total_Deuda"].values[0])
                 nueva_deuda = max(0.0, deuda_actual - monto_abono)
                 
                 df_f.loc[df_f["Cliente"] == cli_sel, "Total_Deuda"] = nueva_deuda
@@ -630,8 +609,8 @@ with tab_fiados:
 
     st.divider()
     st.markdown("### 📜 Historial General de Abonos Recibidos")
-    if os.path.exists(ARCHIVO_ABONOS):
-        df_ab_hist = pd.read_csv(ARCHIVO_ABONOS)
+    df_ab_hist = cargar_tabla("abonos", ["Fecha_Hora", "Fecha", "Cliente", "Monto", "Metodo_Pago"])
+    if not df_ab_hist.empty:
         st.dataframe(df_ab_hist.sort_values(by="Fecha_Hora", ascending=False), use_container_width=True, hide_index=True)
     else:
         st.info("Aún no se han registrado abonos a deudas.")
@@ -648,21 +627,12 @@ with tab_rep:
     fecha_filtro = st.date_input("Seleccionar Fecha de Cierre de Caja:", value=date.today())
     fecha_str = fecha_filtro.strftime("%Y-%m-%d")
     
-    # Cargar Ventas del Día
-    ventas_dia = pd.DataFrame()
-    if os.path.exists(ARCHIVO_VENTAS):
-        df_v = pd.read_csv(ARCHIVO_VENTAS)
-        if "Fecha" in df_v.columns:
-            ventas_dia = df_v[df_v["Fecha"].astype(str) == str(fecha_str)]
+    df_v = cargar_tabla("ventas", ["Fecha_Hora", "Fecha", "ID", "Producto", "Cantidad", "Precio_Venta", "Total", "Monto_Efectivo", "Monto_Transferencia", "Monto_Fiado", "Metodo_Pago", "Cliente"])
+    ventas_dia = df_v[df_v["Fecha"].astype(str) == str(fecha_str)] if not df_v.empty and "Fecha" in df_v.columns else pd.DataFrame()
 
-    # Cargar Abonos del Día
-    abonos_dia = pd.DataFrame()
-    if os.path.exists(ARCHIVO_ABONOS):
-        df_ab = pd.read_csv(ARCHIVO_ABONOS)
-        if "Fecha" in df_ab.columns:
-            abonos_dia = df_ab[df_ab["Fecha"].astype(str) == str(fecha_str)]
+    df_ab = cargar_tabla("abonos", ["Fecha_Hora", "Fecha", "Cliente", "Monto", "Metodo_Pago"])
+    abonos_dia = df_ab[df_ab["Fecha"].astype(str) == str(fecha_str)] if not df_ab.empty and "Fecha" in df_ab.columns else pd.DataFrame()
 
-    # Cálculo desglosado de ingresos
     if not ventas_dia.empty:
         ventas_efectivo = pd.to_numeric(ventas_dia.get("Monto_Efectivo", ventas_dia[ventas_dia["Metodo_Pago"] == "EFECTIVO"]["Total"]), errors="coerce").fillna(0).sum()
         ventas_transf = pd.to_numeric(ventas_dia.get("Monto_Transferencia", ventas_dia[ventas_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Total"]), errors="coerce").fillna(0).sum()
