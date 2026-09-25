@@ -20,13 +20,16 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def cargar_tabla(worksheet_name, columns_default):
     try:
-        df = conn.read(worksheet=worksheet_name, ttl=0)
+        df = conn.read(
+            spreadsheet="https://docs.google.com/spreadsheets/d/1fqMOserbjbk72F74-mlA-3Qb6DhN0-gnQIbzZQL0eqQ/edit",
+            worksheet=worksheet_name, 
+            ttl=0
+        )
         if df is None or df.empty:
             return pd.DataFrame(columns=columns_default)
         return df
     except Exception:
         return pd.DataFrame(columns=columns_default)
-
 def guardar_tabla(df, worksheet_name):
     conn.update(
         spreadsheet="https://docs.google.com/spreadsheets/d/1fqMOserbjbk72F74-mlA-3Qb6DhN0-gnQIbzZQL0eqQ/edit",
