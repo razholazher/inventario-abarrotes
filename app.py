@@ -31,10 +31,20 @@ def cargar_tabla(worksheet_name, columns_default):
     except Exception:
         return pd.DataFrame(columns=columns_default)
 def guardar_tabla(df, worksheet_name):
+    # Crear una copia limpia para no alterar el DataFrame en memoria de Streamlit
+    df_clean = df.copy()
+    
+    # Rellenar valores nulos/NaN para evitar errores de envío
+    df_clean = df_clean.fillna("")
+    
+    # Convertir todas las columnas a string para asegurar compatibilidad con Google Sheets
+    for col in df_clean.columns:
+        df_clean[col] = df_clean[col].astype(str)
+
     conn.update(
         spreadsheet="https://docs.google.com/spreadsheets/d/1fqMOserbjbk72F74-mlA-3Qb6DhN0-gnQIbzZQL0eqQ/edit",
         worksheet=worksheet_name,
-        data=df
+        data=df_clean
     )
 
 # --- FUNCIONALIDAD DE HORA LOCAL (COLOMBIA) ---
