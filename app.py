@@ -1,10 +1,13 @@
-import streamlit as st
+import sqlite3
 import pandas as pd
-import io
-import time
-from datetime import datetime, date
-from zoneinfo import ZoneInfo
-from streamlit_gsheets import GSheetsConnection
+import streamlit as st
+
+# Nombre del archivo de base de datos local
+DB_FILE = "inventario.db"
+
+def get_connection():
+    """Crea la conexión a la base de datos SQLite local."""
+    return sqlite3.connect(DB_FILE)
 
 # Librerías para generar el PDF
 from reportlab.lib.pagesizes import letter
@@ -19,33 +22,32 @@ st.set_page_config(page_title="Sistema Integral de Abarrotes", page_icon="🏪",
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def cargar_tabla(worksheet_name, columns_default):
+    """Carga los datos desde la base de datos SQLite."""
     try:
-        df = conn.read(
-            spreadsheet="https://docs.google.com/spreadsheets/d/1fqMOserbjbk72F74-mlA-3Qb6DhN0-gnQIbzZQL0eqQ/edit",
-            worksheet=worksheet_name, 
-            ttl=0
-        )
-        if df is None or df.empty:
+        conn = get_connection()
+        # Intentar leer la tabla de SQLite
+        df = pd.read_sql_query(f"SELECT * FROM {worksheet_name}", conn)
+        conn.close()
+        
+        if df.empty:
             return pd.DataFrame(columns=columns_default)
         return df
     except Exception:
+        # Si la tabla aún no existe en SQLite, retornamos un DataFrame con las columnas por defecto
         return pd.DataFrame(columns=columns_default)
 def guardar_tabla(df, worksheet_name):
-    # Crear una copia limpia para no alterar el DataFrame en memoria de Streamlit
-    df_clean = df.copy()
-    
-    # Rellenar valores nulos/NaN para evitar errores de envío
-    df_clean = df_clean.fillna("")
-    
-    # Convertir todas las columnas a string para asegurar compatibilidad con Google Sheets
-    for col in df_clean.columns:
-        df_clean[col] = df_clean[col].astype(str)
-
-    conn.update(
-        spreadsheet="https://docs.google.com/spreadsheets/d/1fqMOserbjbk72F74-mlA-3Qb6DhN0-gnQIbzZQL0eqQ/edit",
-        worksheet=worksheet_name,
-        data=df_clean
-    )
+    """Guarda o actualiza la tabla completa en SQLite."""
+    try:
+        conn = get_connection()
+        # Convertir a string para evitar errores de serialización
+        df_save = df.copy()
+        df_save = df_save.fillna("")
+        
+        # Guardar en SQLite (if_exists='replace' sobrescribe la tabla de manera limpia)
+        df_save.to_sql(worksheet_name, conn, if_exists='replace', index=False)
+        conn.close()
+    except Exception as e:
+        st.error(f"Error al guardar datos en {worksheet_name}: {e}")
 
 # --- FUNCIONALIDAD DE HORA LOCAL (COLOMBIA) ---
 def obtener_fecha_hora_local():
