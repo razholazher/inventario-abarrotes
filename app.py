@@ -125,7 +125,7 @@ def registrar_abono_historial(cliente, monto, metodo_pago):
         df_ab = pd.DataFrame([nuevo_abono])
     df_ab.to_csv(ARCHIVO_ABONOS, index=False)
 
-# Función para generar el PDF en memoria
+# Función para generar el PDF del Inventario en memoria
 def generar_pdf_inventario(df):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
@@ -167,6 +167,96 @@ def generar_pdf_inventario(df):
     ]))
     
     story.append(tabla)
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+# Función para generar el PDF del Cierre de Caja en memoria
+def generar_pdf_cierre_caja(fecha_str, total_efectivo, total_transf, total_fiado, total_recaudo, df_ventas, df_abonos):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    story = []
+    
+    styles = getSampleStyleSheet()
+    titulo_style = ParagraphStyle(
+        'TituloStyle', parent=styles['Heading1'], fontSize=16, textColor=colors.HexColor("#1E3A8A"), spaceAfter=8
+    )
+    sub_style = ParagraphStyle(
+        'SubStyle', parent=styles['Heading2'], fontSize=12, textColor=colors.HexColor("#1F2937"), spaceBefore=10, spaceAfter=6
+    )
+    
+    story.append(Paragraph(f"📊 REPORTE DE CIERRE DE CAJA - {fecha_str}", titulo_style))
+    story.append(Paragraph(f"Fecha de Generación: {obtener_fecha_hora_local()}", styles['Normal']))
+    story.append(Spacer(1, 10))
+    
+    # Resumen Financiero
+    data_resumen = [
+        ["CONCEPTO", "MONTO"],
+        ["💵 Total Efectivo en Caja", f"${total_efectivo:,.2f}"],
+        ["💳 Total Transferencias", f"${total_transf:,.2f}"],
+        ["🤝 Valor Mercancía Fiada Hoy", f"${total_fiado:,.2f}"],
+        ["💰 RECAUDO REAL DEL DÍA", f"${total_recaudo:,.2f}"]
+    ]
+    t_resumen = Table(data_resumen, colWidths=[250, 250])
+    t_resumen.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#D1D5DB")),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#D1E7DD")),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+    ]))
+    story.append(t_resumen)
+    story.append(Spacer(1, 15))
+    
+    # Tabla de Ventas
+    story.append(Paragraph("📑 Detalle de Ventas del Día", sub_style))
+    if not df_ventas.empty:
+        data_v = [["Hora", "Producto", "Cant.", "Total", "Pago", "Cliente"]]
+        for _, r in df_ventas.iterrows():
+            data_v.append([
+                str(r["Fecha_Hora"]).split()[-1] if len(str(r["Fecha_Hora"]).split()) > 1 else str(r["Fecha_Hora"]),
+                str(r["Producto"]),
+                str(r["Cantidad"]),
+                f"${r['Total']:,.2f}",
+                str(r["Metodo_Pago"]),
+                str(r["Cliente"]) if pd.notna(r["Cliente"]) else ""
+            ])
+        t_ventas = Table(data_v, colWidths=[60, 160, 40, 70, 90, 80])
+        t_ventas.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#374151")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
+        ]))
+        story.append(t_ventas)
+    else:
+        story.append(Paragraph("No hubo ventas en la fecha seleccionada.", styles['Normal']))
+        
+    story.append(Spacer(1, 15))
+    
+    # Tabla de Abonos
+    story.append(Paragraph("💵 Abonos Recibidos Hoy", sub_style))
+    if not df_abonos.empty:
+        data_a = [["Hora", "Cliente", "Monto", "Método Pago"]]
+        for _, r in df_abonos.iterrows():
+            data_a.append([
+                str(r["Fecha_Hora"]).split()[-1] if len(str(r["Fecha_Hora"]).split()) > 1 else str(r["Fecha_Hora"]),
+                str(r["Cliente"]),
+                f"${r['Monto']:,.2f}",
+                str(r["Metodo_Pago"])
+            ])
+        t_abonos = Table(data_a, colWidths=[80, 200, 100, 120])
+        t_abonos.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#374151")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
+        ]))
+        story.append(t_abonos)
+    else:
+        story.append(Paragraph("No se registraron abonos en esta fecha.", styles['Normal']))
+        
     doc.build(story)
     buffer.seek(0)
     return buffer
@@ -305,7 +395,7 @@ with tab_inv:
     with col_inv2:
         if not df_inv.empty:
             pdf_data = generar_pdf_inventario(df_inv)
-            st.download_button("📄 Descargar PDF", data=pdf_data, file_name="Inventario.pdf", mime="application/pdf", use_container_width=True)
+            st.download_button("📄 Descargar PDF Inventario", data=pdf_data, file_name="Inventario.pdf", mime="application/pdf", use_container_width=True)
 
     if not df_inv.empty:
         st.dataframe(df_inv, use_container_width=True)
@@ -501,8 +591,11 @@ with tab_fiados:
 # 6. REPORTES Y CIERRE DE CAJA
 # ==========================================
 with tab_rep:
-    st.subheader("📊 Cierre de Caja Diario y Reportes Financieros")
+    col_rep1, col_rep2 = st.columns([3, 1])
     
+    with col_rep1:
+        st.subheader("📊 Cierre de Caja Diario y Reportes Financieros")
+        
     fecha_filtro = st.date_input("Seleccionar Fecha de Cierre de Caja:", value=date.today())
     fecha_str = fecha_filtro.strftime("%Y-%m-%d")
     
@@ -518,8 +611,6 @@ with tab_rep:
         df_ab = pd.read_csv(ARCHIVO_ABONOS)
         abonos_dia = df_ab[df_ab["Fecha"] == fecha_str]
 
-    st.markdown(f"### 💵 Arqueo y Cierre de Caja: **{fecha_str}**")
-    
     # Calculo de ingresos REALES de Dinero
     ventas_efectivo = ventas_dia[ventas_dia["Metodo_Pago"] == "EFECTIVO"]["Total"].sum() if not ventas_dia.empty else 0
     ventas_transf = ventas_dia[ventas_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Total"].sum() if not ventas_dia.empty else 0
@@ -531,6 +622,20 @@ with tab_rep:
     total_efectivo_caja = ventas_efectivo + abonos_efectivo
     total_transf_caja = ventas_transf + abonos_transf
     recaudo_real_dia = total_efectivo_caja + total_transf_caja
+
+    with col_rep2:
+        pdf_cierre_data = generar_pdf_cierre_caja(
+            fecha_str, total_efectivo_caja, total_transf_caja, ventas_fiado, recaudo_real_dia, ventas_dia, abonos_dia
+        )
+        st.download_button(
+            "📄 Descargar PDF Cierre de Caja",
+            data=pdf_cierre_data,
+            file_name=f"Cierre_Caja_{fecha_str}.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+
+    st.markdown(f"### 💵 Arqueo y Cierre de Caja: **{fecha_str}**")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("💵 Total Efectivo en Caja", f"${total_efectivo_caja:,.2f}", delta=f"+${abonos_efectivo:,.2f} de abonos" if abonos_efectivo > 0 else None)
