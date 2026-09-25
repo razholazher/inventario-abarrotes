@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import io
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 
 # Librerías para generar el PDF
 from reportlab.lib.pagesizes import letter
@@ -19,6 +20,13 @@ ARCHIVO_VENTAS = "ventas.csv"
 ARCHIVO_KARDEX = "kardex.csv"
 ARCHIVO_FIADOS = "fiados.csv"
 
+# --- FUNCIONALIDAD DE HORA LOCAL (COLOMBIA) ---
+def obtener_fecha_hora_local():
+    return datetime.now(ZoneInfo("America/Bogota")).strftime("%Y-%m-%d %H:%M:%S")
+
+def obtener_fecha_corta_local():
+    return datetime.now(ZoneInfo("America/Bogota")).strftime("%Y-%m-%d")
+
 # --- FUNCIONES DE CARGA Y GUARDADO ---
 
 def cargar_inventario():
@@ -32,8 +40,8 @@ def cargar_inventario():
             df["Observaciones"] = df["Observaciones"].fillna("").astype(str).str.upper()
             
             if "Fecha Ingreso" not in df.columns:
-                df["Fecha Ingreso"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            df["Fecha Ingreso"] = df["Fecha Ingreso"].fillna("")
+                df["Fecha Ingreso"] = obtener_fecha_hora_local()
+            df["Fecha Ingreso"] = df["Fecha Ingreso"].fillna("").astype(str)
             return df
         except Exception:
             return crear_df_inventario_vacio()
@@ -47,7 +55,7 @@ def guardar_inventario(df):
     df.to_excel(ARCHIVO_INVENTARIO, index=False)
 
 def registrar_kardex(id_prod, nombre, tipo_movimiento, cantidad, motivo=""):
-    fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fecha_hora = obtener_fecha_hora_local()
     nuevo_mov = {
         "Fecha": fecha_hora,
         "ID": str(id_prod),
@@ -64,8 +72,8 @@ def registrar_kardex(id_prod, nombre, tipo_movimiento, cantidad, motivo=""):
     df_kardex.to_csv(ARCHIVO_KARDEX, index=False)
 
 def registrar_venta(items_venta, metodo_pago="EFECTIVO", cliente=""):
-    fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    fecha_corta = datetime.now().strftime("%Y-%m-%d")
+    fecha_hora = obtener_fecha_hora_local()
+    fecha_corta = obtener_fecha_corta_local()
     registros = []
     
     for item in items_venta:
@@ -152,6 +160,7 @@ if not df_inv.empty:
     df_inv["Precio Compra"] = pd.to_numeric(df_inv["Precio Compra"], errors="coerce").fillna(0)
     df_inv["Precio Venta"] = pd.to_numeric(df_inv["Precio Venta"], errors="coerce").fillna(0)
     df_inv["Cantidad"] = pd.to_numeric(df_inv["Cantidad"], errors="coerce").fillna(0).astype(int)
+    df_inv["Fecha Ingreso"] = df_inv["Fecha Ingreso"].astype(str)
 
 # Inicialización de estado de sesión para el Carrito de Ventas
 if "carrito" not in st.session_state:
@@ -160,7 +169,7 @@ if "carrito" not in st.session_state:
 # Encabezado Principal
 st.title("🏪 SISTEMA INTEGRAL DE ABARROTES")
 
-# PESTAÑAS PRINCIPALES (Sin Vencimientos)
+# PESTAÑAS PRINCIPALES
 tab_pos, tab_inv, tab_kardex, tab_prov, tab_fiados, tab_rep = st.tabs([
     "🛒 PUNTO DE VENTA (POS)",
     "📦 INVENTARIO & PRODUCTOS",
@@ -247,13 +256,13 @@ with tab_pos:
                         df_f = cargar_fiados()
                         if cliente_fiado in df_f["Cliente"].values:
                             df_f.loc[df_f["Cliente"] == cliente_fiado, "Total_Deuda"] += total_pagar
-                            df_f.loc[df_f["Cliente"] == cliente_fiado, "Fecha_Ultimo_Movimiento"] = datetime.now().strftime("%Y-%m-%d")
+                            df_f.loc[df_f["Cliente"] == cliente_fiado, "Fecha_Ultimo_Movimiento"] = obtener_fecha_corta_local()
                         else:
                             nuevo_fiado = {
                                 "Cliente": cliente_fiado,
                                 "Total_Deuda": total_pagar,
                                 "Ultimo_Abono": 0,
-                                "Fecha_Ultimo_Movimiento": datetime.now().strftime("%Y-%m-%d")
+                                "Fecha_Ultimo_Movimiento": obtener_fecha_corta_local()
                             }
                             df_f = pd.concat([df_f, pd.DataFrame([nuevo_fiado])], ignore_index=True)
                         guardar_fiados(df_f)
@@ -303,11 +312,11 @@ with tab_inv:
         val_venta = str(prod["Precio Venta"])
         val_cant = str(prod["Cantidad"])
         val_prov = str(prod.get("Proveedor", "GENERAL")).upper()
-        val_ingreso = str(prod.get("Fecha Ingreso", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        val_ingreso = str(prod.get("Fecha Ingreso", obtener_fecha_hora_local()))
         val_obs = str(prod["Observaciones"]).upper() if pd.notna(prod["Observaciones"]) else ""
     else:
         val_id, val_nombre, val_cat, val_compra, val_venta, val_cant, val_prov, val_obs = "", "", "", "", "", "", "GENERAL", ""
-        val_ingreso = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        val_ingreso = obtener_fecha_hora_local()
 
     with st.form("form_producto", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
@@ -345,27 +354,27 @@ with tab_inv:
                     p_compra_nuevo = float(precio_compra.replace(",", "."))
                     p_venta_nuevo = float(precio_venta.replace(",", "."))
                     cant_nueva = int(cantidad)
-                    fecha_ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    fecha_ahora = obtener_fecha_hora_local()
 
                     existe = id_ingresado in df_inv["ID"].astype(str).values
 
                     if existe and is_nuevo and modo_ingreso.startswith("Sumar"):
-                        prod_existente = df_inv[df_inv["ID"].astype(str) == id_ingresado].iloc[0]
-                        cant_actual = int(prod_existente["Cantidad"])
-                        p_compra_actual = float(prod_existente["Precio Compra"])
+                        idx = df_inv[df_inv["ID"].astype(str) == id_ingresado].index[0]
+                        cant_actual = int(df_inv.at[idx, "Cantidad"])
+                        p_compra_actual = float(df_inv.at[idx, "Precio Compra"])
 
                         costo_total_acumulado = (cant_actual * p_compra_actual) + (cant_nueva * p_compra_nuevo)
                         cant_total = cant_actual + cant_nueva
                         nuevo_p_compra_promedio = costo_total_acumulado / cant_total if cant_total > 0 else p_compra_nuevo
 
-                        df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Cantidad"] = cant_total
-                        df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Precio Compra"] = round(nuevo_p_compra_promedio, 2)
-                        df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Precio Venta"] = p_venta_nuevo
-                        df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Nombre"] = nombre.strip().upper()
-                        df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Categoría"] = categoria.strip().upper()
-                        df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Proveedor"] = proveedor.strip().upper()
-                        df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Fecha Ingreso"] = fecha_ahora
-                        df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Observaciones"] = observaciones.strip().upper()
+                        df_inv.at[idx, "Cantidad"] = cant_total
+                        df_inv.at[idx, "Precio Compra"] = round(nuevo_p_compra_promedio, 2)
+                        df_inv.at[idx, "Precio Venta"] = p_venta_nuevo
+                        df_inv.at[idx, "Nombre"] = nombre.strip().upper()
+                        df_inv.at[idx, "Categoría"] = categoria.strip().upper()
+                        df_inv.at[idx, "Proveedor"] = proveedor.strip().upper()
+                        df_inv.at[idx, "Fecha Ingreso"] = str(fecha_ahora)
+                        df_inv.at[idx, "Observaciones"] = observaciones.strip().upper()
 
                         guardar_inventario(df_inv)
                         registrar_kardex(id_ingresado, nombre, "ENTRADA", cant_nueva, "Reingreso Mercancía (Promediado)")
@@ -373,15 +382,15 @@ with tab_inv:
                         st.rerun()
                     else:
                         nuevo_registro = {
-                            "ID": id_ingresado,
-                            "Nombre": nombre.strip().upper(),
-                            "Categoría": categoria.strip().upper(),
+                            "ID": str(id_ingresado),
+                            "Nombre": str(nombre.strip().upper()),
+                            "Categoría": str(categoria.strip().upper()),
                             "Precio Compra": p_compra_nuevo,
                             "Precio Venta": p_venta_nuevo,
                             "Cantidad": cant_nueva,
-                            "Proveedor": proveedor.strip().upper(),
-                            "Fecha Ingreso": fecha_ahora if is_nuevo else val_ingreso,
-                            "Observaciones": observaciones.strip().upper()
+                            "Proveedor": str(proveedor.strip().upper()),
+                            "Fecha Ingreso": str(fecha_ahora if is_nuevo else val_ingreso),
+                            "Observaciones": str(observaciones.strip().upper())
                         }
                         if existe:
                             df_inv = df_inv[df_inv["ID"].astype(str) != id_ingresado]
@@ -453,7 +462,7 @@ with tab_fiados:
                 
                 df_f.loc[df_f["Cliente"] == cli_sel, "Total_Deuda"] = nueva_deuda
                 df_f.loc[df_f["Cliente"] == cli_sel, "Ultimo_Abono"] = monto_abono
-                df_f.loc[df_f["Cliente"] == cli_sel, "Fecha_Ultimo_Movimiento"] = datetime.now().strftime("%Y-%m-%d")
+                df_f.loc[df_f["Cliente"] == cli_sel, "Fecha_Ultimo_Movimiento"] = obtener_fecha_corta_local()
                 
                 guardar_fiados(df_f)
                 st.success(f"Abono de ${monto_abono:,.2f} registrado para {cli_sel}. Nueva deuda: ${nueva_deuda:,.2f}")
