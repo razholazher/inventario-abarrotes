@@ -3,4 +3,3 @@ pandas
 openpyxl
 reportlab
 st-gsheets-connection
-streamlit-gsheets
