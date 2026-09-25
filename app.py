@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import io
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 
 # Librerías para generar el PDF
 from reportlab.lib.pagesizes import letter
@@ -11,7 +11,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # Configuración de página
-st.set_page_config(page_title="Sistema de Gestión de Inventario & POS", page_icon="🏪", layout="wide")
+st.set_page_config(page_title="Sistema Integral de Abarrotes", page_icon="🏪", layout="wide")
 
 # Archivos de datos
 ARCHIVO_INVENTARIO = "inventario.xlsx"
@@ -31,10 +31,9 @@ def cargar_inventario():
             df["Proveedor"] = df.get("Proveedor", pd.Series(["GENERAL"] * len(df))).astype(str).str.upper()
             df["Observaciones"] = df["Observaciones"].fillna("").astype(str).str.upper()
             
-            # Formato de fechas de vencimiento
-            if "Fecha Vencimiento" not in df.columns:
-                df["Fecha Vencimiento"] = ""
-            df["Fecha Vencimiento"] = df["Fecha Vencimiento"].fillna("")
+            if "Fecha Ingreso" not in df.columns:
+                df["Fecha Ingreso"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            df["Fecha Ingreso"] = df["Fecha Ingreso"].fillna("")
             return df
         except Exception:
             return crear_df_inventario_vacio()
@@ -42,7 +41,7 @@ def cargar_inventario():
         return crear_df_inventario_vacio()
 
 def crear_df_inventario_vacio():
-    return pd.DataFrame(columns=["ID", "Nombre", "Categoría", "Precio Compra", "Precio Venta", "Cantidad", "Proveedor", "Fecha Vencimiento", "Observaciones"])
+    return pd.DataFrame(columns=["ID", "Nombre", "Categoría", "Precio Compra", "Precio Venta", "Cantidad", "Proveedor", "Fecha Ingreso", "Observaciones"])
 
 def guardar_inventario(df):
     df.to_excel(ARCHIVO_INVENTARIO, index=False)
@@ -114,7 +113,7 @@ def generar_pdf_inventario(df):
     story.append(Paragraph("📦 REPORTE OFICIAL DE INVENTARIO", titulo_style))
     story.append(Spacer(1, 10))
     
-    headers = ["ID", "Nombre", "Categoría", "P. Compra", "P. Venta", "Cant.", "Vencimiento"]
+    headers = ["ID", "Nombre", "Categoría", "P. Compra", "P. Venta", "Cant.", "Fecha Ingreso"]
     data = [headers]
     
     for _, row in df.iterrows():
@@ -125,10 +124,10 @@ def generar_pdf_inventario(df):
             f"${row['Precio Compra']:,.2f}",
             f"${row['Precio Venta']:,.2f}",
             str(row["Cantidad"]),
-            str(row.get("Fecha Vencimiento", ""))
+            str(row.get("Fecha Ingreso", ""))
         ])
     
-    tabla = Table(data, colWidths=[50, 140, 90, 70, 70, 40, 70])
+    tabla = Table(data, colWidths=[50, 130, 80, 65, 65, 40, 90])
     tabla.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -161,11 +160,10 @@ if "carrito" not in st.session_state:
 # Encabezado Principal
 st.title("🏪 SISTEMA INTEGRAL DE ABARROTES")
 
-# PESTAÑAS PRINCIPALES
-tab_pos, tab_inv, tab_venc, tab_kardex, tab_prov, tab_fiados, tab_rep = st.tabs([
+# PESTAÑAS PRINCIPALES (Sin Vencimientos)
+tab_pos, tab_inv, tab_kardex, tab_prov, tab_fiados, tab_rep = st.tabs([
     "🛒 PUNTO DE VENTA (POS)",
     "📦 INVENTARIO & PRODUCTOS",
-    "⏰ VENCIMIENTOS",
     "📜 KARDEX / MOVIMIENTOS",
     "🚚 PROVEEDORES",
     "🤝 FIADOS / CRÉDITOS",
@@ -199,7 +197,6 @@ with tab_pos:
                         if item_inv["Cantidad"] < cant_vender:
                             st.error("❌ Stock insuficiente.")
                         else:
-                            # Verificar si ya existe en el carrito
                             encontrado = False
                             for c in st.session_state.carrito:
                                 if c["ID"] == id_sel:
@@ -237,7 +234,6 @@ with tab_pos:
                 if metodo_pago == "FIADO" and not cliente_fiado:
                     st.error("❌ Escribe el nombre del cliente para registrar el fiado.")
                 else:
-                    # Descontar de inventario y registrar en Kardex
                     for item in st.session_state.carrito:
                         id_item = item["ID"]
                         cant = item["Cantidad"]
@@ -247,7 +243,6 @@ with tab_pos:
                     guardar_inventario(df_inv)
                     registrar_venta(st.session_state.carrito, metodo_pago, cliente_fiado)
                     
-                    # Si es fiado, registrar/actualizar deuda
                     if metodo_pago == "FIADO":
                         df_f = cargar_fiados()
                         if cliente_fiado in df_f["Cliente"].values:
@@ -308,10 +303,11 @@ with tab_inv:
         val_venta = str(prod["Precio Venta"])
         val_cant = str(prod["Cantidad"])
         val_prov = str(prod.get("Proveedor", "GENERAL")).upper()
-        val_venc = str(prod.get("Fecha Vencimiento", ""))
+        val_ingreso = str(prod.get("Fecha Ingreso", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         val_obs = str(prod["Observaciones"]).upper() if pd.notna(prod["Observaciones"]) else ""
     else:
-        val_id, val_nombre, val_cat, val_compra, val_venta, val_cant, val_prov, val_venc, val_obs = "", "", "", "", "", "", "GENERAL", "", ""
+        val_id, val_nombre, val_cat, val_compra, val_venta, val_cant, val_prov, val_obs = "", "", "", "", "", "", "GENERAL", ""
+        val_ingreso = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     with st.form("form_producto", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
@@ -328,7 +324,7 @@ with tab_inv:
 
         with col3:
             proveedor = st.text_input("PROVEEDOR", value=val_prov, placeholder="Ej: DIANA / COLANTA")
-            fecha_venc_in = st.text_input("FECHA VENCIMIENTO (AAAA-MM-DD)", value=val_venc, placeholder="Ej: 2026-12-31")
+            st.text_input("FECHA Y HORA DE INGRESO (AUTOMÁTICA)", value=val_ingreso, disabled=True)
             observaciones = st.text_input("OBSERVACIONES", value=val_obs, placeholder="Notas...")
 
         modo_ingreso = "Sobrescribir / Modificar"
@@ -349,6 +345,7 @@ with tab_inv:
                     p_compra_nuevo = float(precio_compra.replace(",", "."))
                     p_venta_nuevo = float(precio_venta.replace(",", "."))
                     cant_nueva = int(cantidad)
+                    fecha_ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
                     existe = id_ingresado in df_inv["ID"].astype(str).values
 
@@ -367,11 +364,11 @@ with tab_inv:
                         df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Nombre"] = nombre.strip().upper()
                         df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Categoría"] = categoria.strip().upper()
                         df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Proveedor"] = proveedor.strip().upper()
-                        df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Fecha Vencimiento"] = fecha_venc_in.strip()
+                        df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Fecha Ingreso"] = fecha_ahora
                         df_inv.loc[df_inv["ID"].astype(str) == id_ingresado, "Observaciones"] = observaciones.strip().upper()
 
                         guardar_inventario(df_inv)
-                        registrar_kardex(id_ingresado, nombre, "ENTRADA", cant_nueva, "Compra Proveedor (Promediado)")
+                        registrar_kardex(id_ingresado, nombre, "ENTRADA", cant_nueva, "Reingreso Mercancía (Promediado)")
                         st.success(f"✅ Stock de '{nombre.upper()}' actualizado ({cant_total} unid).")
                         st.rerun()
                     else:
@@ -383,60 +380,22 @@ with tab_inv:
                             "Precio Venta": p_venta_nuevo,
                             "Cantidad": cant_nueva,
                             "Proveedor": proveedor.strip().upper(),
-                            "Fecha Vencimiento": fecha_venc_in.strip(),
+                            "Fecha Ingreso": fecha_ahora if is_nuevo else val_ingreso,
                             "Observaciones": observaciones.strip().upper()
                         }
                         if existe:
                             df_inv = df_inv[df_inv["ID"].astype(str) != id_ingresado]
                         df_inv = pd.concat([df_inv, pd.DataFrame([nuevo_registro])], ignore_index=True)
                         guardar_inventario(df_inv)
-                        registrar_kardex(id_ingresado, nombre, "ENTRADA" if is_nuevo else "AJUSTE", cant_nueva, "Registro manual")
-                        st.success(f"✅ Producto '{nombre.upper()}' guardado.")
+                        registrar_kardex(id_ingresado, nombre, "ENTRADA" if is_nuevo else "AJUSTE", cant_nueva, "Registro de producto")
+                        st.success(f"✅ Producto '{nombre.upper()}' guardado exitosamente.")
                         st.rerun()
 
                 except ValueError:
                     st.error("❌ Los Precios y la Cantidad deben ser valores numéricos válidos.")
 
 # ==========================================
-# 3. CONTROL DE VENCIMIENTOS
-# ==========================================
-with tab_venc:
-    st.subheader("⏰ Control y Alerta de Caducidad")
-    if not df_inv.empty:
-        hoy = date.today()
-        proximos_7_dias = hoy + timedelta(days=7)
-        
-        df_venc = df_inv[df_inv["Fecha Vencimiento"].str.strip() != ""].copy()
-        
-        if not df_venc.empty:
-            df_venc["Fecha_Obj"] = pd.to_datetime(df_venc["Fecha Vencimiento"], errors="coerce").dt.date
-            df_venc = df_venc.dropna(subset=["Fecha_Obj"])
-            
-            vencidos = df_venc[df_venc["Fecha_Obj"] < hoy]
-            por_vencer = df_venc[(df_venc["Fecha_Obj"] >= hoy) & (df_venc["Fecha_Obj"] <= proximos_7_dias)]
-            
-            c_v1, c_v2 = st.columns(2)
-            with c_v1:
-                st.markdown("### 🚨 Productos Vencidos")
-                if not vencidos.empty:
-                    st.dataframe(vencidos[["ID", "Nombre", "Cantidad", "Fecha Vencimiento"]], use_container_width=True, hide_index=True)
-                else:
-                    st.success("No hay productos vencidos.")
-                    
-            with c_v2:
-                st.markdown("### ⚠️ Vencen en los próximos 7 días")
-                if not por_vencer.empty:
-                    st.warning(f"¡Atención! {len(por_vencer)} producto(s) por vencer. Considera ponerlos en oferta.")
-                    st.dataframe(por_vencer[["ID", "Nombre", "Cantidad", "Fecha Vencimiento"]], use_container_width=True, hide_index=True)
-                else:
-                    st.success("No hay productos próximos a vencer esta semana.")
-        else:
-            st.info("No hay fechas de vencimiento registradas en los productos.")
-    else:
-        st.info("Inventario vacío.")
-
-# ==========================================
-# 4. KARDEX Y MOVIMIENTOS
+# 3. KARDEX Y MOVIMIENTOS
 # ==========================================
 with tab_kardex:
     st.subheader("📜 Historial de Movimientos de Inventario (Kardex)")
@@ -447,7 +406,7 @@ with tab_kardex:
         st.info("Aún no hay movimientos registrados.")
 
 # ==========================================
-# 5. GESTIÓN DE PROVEEDORES
+# 4. GESTIÓN DE PROVEEDORES
 # ==========================================
 with tab_prov:
     st.subheader("🚚 Gestión y Reporte por Proveedor")
@@ -467,7 +426,7 @@ with tab_prov:
         st.info("No hay productos en inventario.")
 
 # ==========================================
-# 6. FIADOS / CRÉDITOS
+# 5. FIADOS / CRÉDITOS
 # ==========================================
 with tab_fiados:
     st.subheader("🤝 Control de Cuentas por Cobrar (Fiados)")
@@ -501,7 +460,7 @@ with tab_fiados:
                 st.rerun()
 
 # ==========================================
-# 7. REPORTES Y CIERRE DE CAJA
+# 6. REPORTES Y CIERRE DE CAJA
 # ==========================================
 with tab_rep:
     st.subheader("📊 Cierre de Caja Diario y Reportes Financieros")
