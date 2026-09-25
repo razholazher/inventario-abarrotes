@@ -19,6 +19,7 @@ ARCHIVO_INVENTARIO = "inventario.xlsx"
 ARCHIVO_VENTAS = "ventas.csv"
 ARCHIVO_KARDEX = "kardex.csv"
 ARCHIVO_FIADOS = "fiados.csv"
+ARCHIVO_ABONOS = "abonos.csv"
 
 # --- FUNCIONALIDAD DE HORA LOCAL (COLOMBIA) ---
 def obtener_fecha_hora_local():
@@ -106,6 +107,23 @@ def cargar_fiados():
 
 def guardar_fiados(df_fiados):
     df_fiados.to_csv(ARCHIVO_FIADOS, index=False)
+
+def registrar_abono_historial(cliente, monto, metodo_pago):
+    fecha_hora = obtener_fecha_hora_local()
+    fecha_corta = obtener_fecha_corta_local()
+    nuevo_abono = {
+        "Fecha_Hora": fecha_hora,
+        "Fecha": fecha_corta,
+        "Cliente": str(cliente).upper(),
+        "Monto": monto,
+        "Metodo_Pago": metodo_pago.upper()
+    }
+    if os.path.exists(ARCHIVO_ABONOS):
+        df_ab = pd.read_csv(ARCHIVO_ABONOS)
+        df_ab = pd.concat([df_ab, pd.DataFrame([nuevo_abono])], ignore_index=True)
+    else:
+        df_ab = pd.DataFrame([nuevo_abono])
+    df_ab.to_csv(ARCHIVO_ABONOS, index=False)
 
 # Función para generar el PDF en memoria
 def generar_pdf_inventario(df):
@@ -455,6 +473,7 @@ with tab_fiados:
             clientes_deudores = df_f[df_f["Total_Deuda"] > 0]["Cliente"].tolist()
             cli_sel = st.selectbox("Selecciona Cliente:", clientes_deudores)
             monto_abono = st.number_input("Monto del Abono ($):", min_value=1.0, step=500.0)
+            metodo_abono = st.selectbox("Método de Pago del Abono:", ["EFECTIVO", "TRANSFERENCIA"])
             
             if st.button("💾 Registrar Abono", use_container_width=True):
                 deuda_actual = df_f.loc[df_f["Cliente"] == cli_sel, "Total_Deuda"].values[0]
@@ -465,7 +484,8 @@ with tab_fiados:
                 df_f.loc[df_f["Cliente"] == cli_sel, "Fecha_Ultimo_Movimiento"] = obtener_fecha_corta_local()
                 
                 guardar_fiados(df_f)
-                st.success(f"Abono de ${monto_abono:,.2f} registrado para {cli_sel}. Nueva deuda: ${nueva_deuda:,.2f}")
+                registrar_abono_historial(cli_sel, monto_abono, metodo_abono)
+                st.success(f"Abono de ${monto_abono:,.2f} ({metodo_abono}) registrado para {cli_sel}. Nueva deuda: ${nueva_deuda:,.2f}")
                 st.rerun()
 
 # ==========================================
@@ -474,32 +494,55 @@ with tab_fiados:
 with tab_rep:
     st.subheader("📊 Cierre de Caja Diario y Reportes Financieros")
     
+    fecha_filtro = st.date_input("Seleccionar Fecha de Cierre de Caja:", value=date.today())
+    fecha_str = fecha_filtro.strftime("%Y-%m-%d")
+    
+    # Cargar Ventas del Día
+    ventas_dia = pd.DataFrame()
     if os.path.exists(ARCHIVO_VENTAS):
         df_v = pd.read_csv(ARCHIVO_VENTAS)
-        
-        fecha_filtro = st.date_input("Seleccionar Fecha de Cierre de Caja:", value=date.today())
-        fecha_str = fecha_filtro.strftime("%Y-%m-%d")
-        
         ventas_dia = df_v[df_v["Fecha"] == fecha_str]
-        
-        st.markdown(f"### 💵 Cierre de Caja del Día: **{fecha_str}**")
-        
+
+    # Cargar Abonos del Día
+    abonos_dia = pd.DataFrame()
+    if os.path.exists(ARCHIVO_ABONOS):
+        df_ab = pd.read_csv(ARCHIVO_ABONOS)
+        abonos_dia = df_ab[df_ab["Fecha"] == fecha_str]
+
+    st.markdown(f"### 💵 Arqueo y Cierre de Caja: **{fecha_str}**")
+    
+    # Calculo de ingresos REALES de Dinero
+    ventas_efectivo = ventas_dia[ventas_dia["Metodo_Pago"] == "EFECTIVO"]["Total"].sum() if not ventas_dia.empty else 0
+    ventas_transf = ventas_dia[ventas_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Total"].sum() if not ventas_dia.empty else 0
+    ventas_fiado = ventas_dia[ventas_dia["Metodo_Pago"] == "FIADO"]["Total"].sum() if not ventas_dia.empty else 0
+
+    abonos_efectivo = abonos_dia[abonos_dia["Metodo_Pago"] == "EFECTIVO"]["Monto"].sum() if not abonos_dia.empty else 0
+    abonos_transf = abonos_dia[abonos_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Monto"].sum() if not abonos_dia.empty else 0
+
+    total_efectivo_caja = ventas_efectivo + abonos_efectivo
+    total_transf_caja = ventas_transf + abonos_transf
+    recaudo_real_dia = total_efectivo_caja + total_transf_caja
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("💵 Total Efectivo en Caja", f"${total_efectivo_caja:,.2f}", delta=f"+${abonos_efectivo:,.2f} de abonos" if abonos_efectivo > 0 else None)
+    c2.metric("💳 Total Transferencias", f"${total_transf_caja:,.2f}", delta=f"+${abonos_transf:,.2f} de abonos" if abonos_transf > 0 else None)
+    c3.metric("🤝 Valor Mercancía Fiada Hoy", f"${ventas_fiado:,.2f}")
+    c4.metric("💰 RECAUDO REAL DEL DÍA", f"${recaudo_real_dia:,.2f}")
+
+    st.divider()
+    
+    col_r1, col_r2 = st.columns(2)
+    
+    with col_r1:
+        st.markdown("### 📑 Ventas del Día")
         if not ventas_dia.empty:
-            total_efectivo = ventas_dia[ventas_dia["Metodo_Pago"] == "EFECTIVO"]["Total"].sum()
-            total_transf = ventas_dia[ventas_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Total"].sum()
-            total_fiado = ventas_dia[ventas_dia["Metodo_Pago"] == "FIADO"]["Total"].sum()
-            gran_total_dia = ventas_dia["Total"].sum()
-            
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("💵 Total Efectivo", f"${total_efectivo:,.2f}")
-            c2.metric("💳 Total Transferencias", f"${total_transf:,.2f}")
-            c3.metric("🤝 Total Fiados", f"${total_fiado:,.2f}")
-            c4.metric("💰 INGRESOS TOTALES", f"${gran_total_dia:,.2f}")
-            
-            st.divider()
-            st.markdown("### 📑 Detalle de Ventas del Día")
             st.dataframe(ventas_dia[["Fecha_Hora", "Producto", "Cantidad", "Total", "Metodo_Pago", "Cliente"]], use_container_width=True, hide_index=True)
         else:
-            st.info(f"No hay ventas registradas para la fecha {fecha_str}.")
-    else:
-        st.info("Aún no se han registrado ventas en el sistema.")
+            st.info("No hay ventas registradas para este día.")
+            
+    with col_r2:
+        st.markdown("### 💵 Abonos Recibidos Hoy")
+        if not abonos_dia.empty:
+            st.dataframe(abonos_dia[["Fecha_Hora", "Cliente", "Monto", "Metodo_Pago"]], use_container_width=True, hide_index=True)
+        else:
+            st.info("No se registraron abonos a deudas este día.")
