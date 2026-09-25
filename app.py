@@ -426,6 +426,7 @@ with tab_inv:
 # ==========================================
 with tab_kardex:
     st.subheader("📜 Historial de Movimientos de Inventario (Kardex)")
+    st.info("💡 Nota: El Kardex registra el movimiento físico de mercancías (entradas, ventas y ajustes). Los abonos en efectivo/transferencia se consultan en las pestañas de Fiados y Reportes de Caja.")
     if os.path.exists(ARCHIVO_KARDEX):
         df_k = pd.read_csv(ARCHIVO_KARDEX)
         st.dataframe(df_k.sort_values(by="Fecha", ascending=False), use_container_width=True, hide_index=True)
@@ -487,6 +488,14 @@ with tab_fiados:
                 registrar_abono_historial(cli_sel, monto_abono, metodo_abono)
                 st.success(f"Abono de ${monto_abono:,.2f} ({metodo_abono}) registrado para {cli_sel}. Nueva deuda: ${nueva_deuda:,.2f}")
                 st.rerun()
+
+    st.divider()
+    st.markdown("### 📜 Historial General de Abonos Recibidos")
+    if os.path.exists(ARCHIVO_ABONOS):
+        df_ab_hist = pd.read_csv(ARCHIVO_ABONOS)
+        st.dataframe(df_ab_hist.sort_values(by="Fecha_Hora", ascending=False), use_container_width=True, hide_index=True)
+    else:
+        st.info("Aún no se han registrado abonos a deudas.")
 
 # ==========================================
 # 6. REPORTES Y CIERRE DE CAJA
