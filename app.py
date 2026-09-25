@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import time
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from streamlit_gsheets import GSheetsConnection
@@ -619,11 +620,8 @@ with tab_fiados:
 # 6. REPORTES Y CIERRE DE CAJA
 # ==========================================
 with tab_rep:
-    col_rep1, col_rep2 = st.columns([3, 1])
+    st.subheader("📊 Cierre de Caja Diario y Reportes Financieros")
     
-    with col_rep1:
-        st.subheader("📊 Cierre de Caja Diario y Reportes Financieros")
-        
     fecha_filtro = st.date_input("Seleccionar Fecha de Cierre de Caja:", value=date.today())
     fecha_str = fecha_filtro.strftime("%Y-%m-%d")
     
@@ -644,44 +642,36 @@ with tab_rep:
     abonos_transf = pd.to_numeric(abonos_dia[abonos_dia["Metodo_Pago"] == "TRANSFERENCIA"]["Monto"], errors="coerce").sum() if not abonos_dia.empty else 0
 
     total_efectivo_caja = ventas_efectivo + abonos_efectivo
-    total_transf_caja = ventas_transf + abonos_transf
-    recaudo_real_dia = total_efectivo_caja + total_transf_caja
-
-    with col_rep2:
-        pdf_cierre_data = generar_pdf_cierre_caja(
-            fecha_str, total_efectivo_caja, total_transf_caja, ventas_fiado, recaudo_real_dia, ventas_dia, abonos_dia
-        )
-        st.download_button(
-            "📄 Descargar PDF Cierre de Caja",
-            data=pdf_cierre_data,
-            file_name=f"Cierre_Caja_{fecha_str}.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
-
-    st.markdown(f"### 💵 Arqueo y Cierre de Caja: **{fecha_str}**")
+    total_transferencias = ventas_transf + abonos_transf
+    recaudo_real_dia = total_efectivo_caja + total_transferencias
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("💵 Total Efectivo en Caja", f"${total_efectivo_caja:,.2f}", delta=f"+${abonos_efectivo:,.2f} de abonos" if abonos_efectivo > 0 else None)
-    c2.metric("💳 Total Transferencias", f"${total_transf_caja:,.2f}", delta=f"+${abonos_transf:,.2f} de abonos" if abonos_transf > 0 else None)
-    c3.metric("🤝 Valor Mercancía Fiada Hoy", f"${ventas_fiado:,.2f}")
-    c4.metric("💰 RECAUDO REAL DEL DÍA", f"${recaudo_real_dia:,.2f}")
+    c1.metric("💵 Efectivo en Caja", f"${total_efectivo_caja:,.2f}")
+    c2.metric("💳 Transferencias", f"${total_transferencias:,.2f}")
+    c3.metric("🤝 Fiado Hoy", f"${ventas_fiado:,.2f}")
+    c4.metric("💰 Recaudo Real", f"${recaudo_real_dia:,.2f}")
 
     st.divider()
-    
-    col_r1, col_r2 = st.columns(2)
-    
-    with col_r1:
-        st.markdown("### 📑 Ventas del Día")
-        if not ventas_dia.empty:
-            cols_mostrar = [c for c in ["Fecha_Hora", "Producto", "Cantidad", "Total", "Metodo_Pago", "Cliente"] if c in ventas_dia.columns]
-            st.dataframe(ventas_dia[cols_mostrar], use_container_width=True, hide_index=True)
-        else:
-            st.info("No hay ventas registradas para este día.")
-            
-    with col_r2:
-        st.markdown("### 💵 Abonos Recibidos Hoy")
-        if not abonos_dia.empty:
-            st.dataframe(abonos_dia[["Fecha_Hora", "Cliente", "Monto", "Metodo_Pago"]], use_container_width=True, hide_index=True)
-        else:
-            st.info("No se registraron abonos a deudas este día.")
+
+    pdf_cierre = generar_pdf_cierre_caja(
+        fecha_str, total_efectivo_caja, total_transferencias, ventas_fiado, recaudo_real_dia, ventas_dia, abonos_dia
+    )
+    st.download_button(
+        label="📄 Descargar PDF Cierre de Caja",
+        data=pdf_cierre,
+        file_name=f"Cierre_Caja_{fecha_str}.pdf",
+        mime="application/pdf",
+        use_container_width=True
+    )
+
+    st.markdown("### 📑 Ventas Registradas en el Día")
+    if not ventas_dia.empty:
+        st.dataframe(ventas_dia, use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay ventas registradas para esta fecha.")
+
+    st.markdown("### 💵 Abonos Registrados en el Día")
+    if not abonos_dia.empty:
+        st.dataframe(abonos_dia, use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay abonos registrados para esta fecha.")
